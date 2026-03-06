@@ -58,7 +58,8 @@ public:
 
     // Request data
     struct Request {
-        std::string input;
+        std::string input;              // Simple text input
+        nlohmann::json inputJson;       // Structured input (array with images etc.)
         std::string instructions;
         std::string model;
         float temperature;
@@ -296,7 +297,11 @@ private:
         nlohmann::json body;
 
         body["model"] = request.model;
-        body["input"] = request.input;
+        if (!request.inputJson.is_null() && !request.inputJson.empty()) {
+            body["input"] = request.inputJson;
+        } else {
+            body["input"] = request.input;
+        }
         body["temperature"] = request.temperature;
         body["stream"] = false;
 
