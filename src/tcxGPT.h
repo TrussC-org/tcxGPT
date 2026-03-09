@@ -109,6 +109,7 @@ public:
 
         http_.setBaseUrl("https://api.openai.com");
         http_.setBearerToken(apiKey_);
+        http_.setTimeout(120); // DALL-E b64_json can take a while
 
         running_ = true;
         workerThread_ = std::thread(&GPT::workerFunction, this);
