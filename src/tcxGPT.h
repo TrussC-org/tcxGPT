@@ -169,6 +169,44 @@ public:
         responseQueue_.clear();
     }
 
+    // Image generation request
+    struct ImageRequest {
+        std::string prompt;
+        std::string model = "dall-e-3";
+        std::string size = "1024x1024";
+        std::string quality = "standard";
+    };
+
+    // Image generation response
+    struct ImageResponse {
+        bool ok = false;
+        std::string error;
+        std::string imageData; // Raw binary (PNG/JPEG)
+    };
+
+    // Queue a DALL-E image generation request
+    void generateImage(const ImageRequest& request) {
+        std::lock_guard<std::mutex> lock(imageRequestMutex_);
+        imageRequestQueue_.push_back(request);
+    }
+
+    // Check if there are new image responses
+    bool hasNewImageResponse() {
+        std::lock_guard<std::mutex> lock(imageResponseMutex_);
+        return !imageResponseQueue_.empty();
+    }
+
+    // Get the next image response
+    ImageResponse getNextImageResponse() {
+        std::lock_guard<std::mutex> lock(imageResponseMutex_);
+        ImageResponse response;
+        if (!imageResponseQueue_.empty()) {
+            response = imageResponseQueue_.front();
+            imageResponseQueue_.pop_front();
+        }
+        return response;
+    }
+
     // Configuration
     void setModel(const std::string& model) { defaultModel_ = model; }
     std::string getModel() const { return defaultModel_; }
@@ -238,6 +276,27 @@ private:
                 // Update conversation state if successful
                 if (response.errorCode == Success && !response.id.empty()) {
                     lastResponseId_ = response.id;
+                }
+                continue;
+            }
+
+            // Check for image generation requests
+            ImageRequest imageRequest;
+            bool hasImageRequest = false;
+            {
+                std::lock_guard<std::mutex> lock(imageRequestMutex_);
+                if (!imageRequestQueue_.empty()) {
+                    imageRequest = imageRequestQueue_.front();
+                    imageRequestQueue_.pop_front();
+                    hasImageRequest = true;
+                }
+            }
+
+            if (hasImageRequest) {
+                ImageResponse imageResponse = processImageRequest(imageRequest);
+                {
+                    std::lock_guard<std::mutex> lock(imageResponseMutex_);
+                    imageResponseQueue_.push_back(std::move(imageResponse));
                 }
             } else {
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -405,6 +464,77 @@ private:
         return response;
     }
 
+    // Process DALL-E image generation request
+    ImageResponse processImageRequest(const ImageRequest& request) {
+        ImageResponse response;
+
+        try {
+            nlohmann::json body = {
+                {"model", request.model},
+                {"prompt", request.prompt},
+                {"n", 1},
+                {"size", request.size},
+                {"quality", request.quality},
+                {"response_format", "b64_json"}
+            };
+
+            auto res = http_.post("/v1/images/generations", body);
+
+            if (!res.ok()) {
+                response.error = "DALL-E error: HTTP " + std::to_string(res.statusCode);
+                try {
+                    auto j = res.json();
+                    if (j.contains("error") && j["error"].contains("message")) {
+                        response.error += " - " + j["error"]["message"].get<std::string>();
+                    }
+                } catch (...) {}
+                if (!res.error.empty()) {
+                    response.error += " (" + res.error + ")";
+                }
+                return response;
+            }
+
+            auto json = res.json();
+            if (json.contains("data") && json["data"].is_array() && !json["data"].empty()) {
+                std::string b64 = json["data"][0].value("b64_json", "");
+                if (!b64.empty()) {
+                    response.imageData = decodeBase64(b64);
+                    response.ok = true;
+                }
+            }
+
+            if (!response.ok && response.error.empty()) {
+                response.error = "No image data in response";
+            }
+
+        } catch (std::exception& e) {
+            response.error = std::string("DALL-E exception: ") + e.what();
+        }
+
+        return response;
+    }
+
+    // Base64 decode
+    static std::string decodeBase64(const std::string& encoded) {
+        static const std::string chars =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        std::string decoded;
+        decoded.reserve(encoded.size() * 3 / 4);
+        int val = 0, bits = -8;
+        for (unsigned char c : encoded) {
+            if (c == '=' || c == '\n' || c == '\r') continue;
+            auto pos = chars.find(c);
+            if (pos == std::string::npos) continue;
+            val = (val << 6) | (int)pos;
+            bits += 6;
+            if (bits >= 0) {
+                decoded.push_back((char)((val >> bits) & 0xFF));
+                bits -= 8;
+            }
+        }
+        return decoded;
+    }
+
     // Map HTTP status to error code
     ErrorCode parseErrorCode(int statusCode, const nlohmann::json& errorJson) {
         if (statusCode == 401) return InvalidAPIKey;
@@ -442,6 +572,12 @@ private:
     std::deque<Response> responseQueue_;
     std::mutex requestMutex_;
     std::mutex responseMutex_;
+
+    // Image generation queues
+    std::deque<ImageRequest> imageRequestQueue_;
+    std::deque<ImageResponse> imageResponseQueue_;
+    std::mutex imageRequestMutex_;
+    std::mutex imageResponseMutex_;
 
     // Worker thread
     std::thread workerThread_;
