@@ -465,51 +465,68 @@ private:
         return response;
     }
 
-    // Process DALL-E image generation request
+    // Process DALL-E image generation request (with retry)
     ImageResponse processImageRequest(const ImageRequest& request) {
         ImageResponse response;
 
-        try {
-            nlohmann::json body = {
-                {"model", request.model},
-                {"prompt", request.prompt},
-                {"n", 1},
-                {"size", request.size},
-                {"quality", request.quality},
-                {"response_format", "b64_json"}
-            };
+        // Use a separate HttpClient for DALL-E (longer timeout, independent connection)
+        HttpClient dalleHttp;
+        dalleHttp.setBaseUrl("https://api.openai.com");
+        dalleHttp.setBearerToken(apiKey_);
+        dalleHttp.setTimeout(180);
 
-            auto res = http_.post("/v1/images/generations", body);
+        nlohmann::json body = {
+            {"model", request.model},
+            {"prompt", request.prompt},
+            {"n", 1},
+            {"size", request.size},
+            {"quality", request.quality},
+            {"response_format", "b64_json"}
+        };
 
-            if (!res.ok()) {
-                response.error = "DALL-E error: HTTP " + std::to_string(res.statusCode);
-                try {
-                    auto j = res.json();
-                    if (j.contains("error") && j["error"].contains("message")) {
-                        response.error += " - " + j["error"]["message"].get<std::string>();
+        // Retry up to 3 times
+        for (int attempt = 0; attempt < 3; attempt++) {
+            response = {};
+
+            try {
+                if (attempt > 0) {
+                    std::this_thread::sleep_for(std::chrono::seconds(2));
+                }
+
+                auto res = dalleHttp.post("/v1/images/generations", body);
+
+                if (!res.ok()) {
+                    response.error = "DALL-E error: HTTP " + std::to_string(res.statusCode);
+                    try {
+                        auto j = res.json();
+                        if (j.contains("error") && j["error"].contains("message")) {
+                            response.error += " - " + j["error"]["message"].get<std::string>();
+                        }
+                    } catch (...) {}
+                    if (!res.error.empty()) {
+                        response.error += " (" + res.error + ")";
                     }
-                } catch (...) {}
-                if (!res.error.empty()) {
-                    response.error += " (" + res.error + ")";
+                    continue; // retry
                 }
-                return response;
-            }
 
-            auto json = res.json();
-            if (json.contains("data") && json["data"].is_array() && !json["data"].empty()) {
-                std::string b64 = json["data"][0].value("b64_json", "");
-                if (!b64.empty()) {
-                    response.imageData = decodeBase64(b64);
-                    response.ok = true;
+                auto json = res.json();
+                if (json.contains("data") && json["data"].is_array() && !json["data"].empty()) {
+                    std::string b64 = json["data"][0].value("b64_json", "");
+                    if (!b64.empty()) {
+                        response.imageData = decodeBase64(b64);
+                        response.ok = true;
+                    }
                 }
-            }
 
-            if (!response.ok && response.error.empty()) {
-                response.error = "No image data in response";
-            }
+                if (!response.ok && response.error.empty()) {
+                    response.error = "No image data in response";
+                }
 
-        } catch (std::exception& e) {
-            response.error = std::string("DALL-E exception: ") + e.what();
+                if (response.ok) break; // success
+
+            } catch (std::exception& e) {
+                response.error = std::string("DALL-E exception: ") + e.what();
+            }
         }
 
         return response;
