@@ -469,6 +469,13 @@ private:
     ImageResponse processImageRequest(const ImageRequest& request) {
         ImageResponse response;
 
+        // Use a separate HttpClient with verbose logging for debugging
+        HttpClient dalleHttp;
+        dalleHttp.setBaseUrl("https://api.openai.com");
+        dalleHttp.setBearerToken(apiKey_);
+        dalleHttp.setTimeout(180);
+        dalleHttp.setVerbose(true);
+
         nlohmann::json body = {
             {"model", request.model},
             {"prompt", request.prompt},
@@ -478,7 +485,7 @@ private:
             {"response_format", "b64_json"}
         };
 
-        // Retry up to 3 times, reusing the same http_ client that GPT uses
+        // Retry up to 3 times
         for (int attempt = 0; attempt < 3; attempt++) {
             response = {};
 
@@ -487,7 +494,7 @@ private:
                     std::this_thread::sleep_for(std::chrono::seconds(2));
                 }
 
-                auto res = http_.post("/v1/images/generations", body);
+                auto res = dalleHttp.post("/v1/images/generations", body);
 
                 if (!res.ok()) {
                     response.error = "DALL-E error: HTTP " + std::to_string(res.statusCode);
