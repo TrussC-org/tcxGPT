@@ -109,7 +109,7 @@ public:
 
         http_.setBaseUrl("https://api.openai.com");
         http_.setBearerToken(apiKey_);
-        http_.setTimeout(120); // DALL-E b64_json can take a while
+        http_.setTimeout(120); // image generation b64_json can take a while
 
         running_ = true;
         workerThread_ = std::thread(&GPT::workerFunction, this);
@@ -466,7 +466,7 @@ private:
         return response;
     }
 
-    // Process DALL-E image generation request (with retry)
+    // Process image generation request (with retry)
     ImageResponse processImageRequest(const ImageRequest& request) {
         ImageResponse response;
 
@@ -498,7 +498,7 @@ private:
                 auto res = dalleHttp.post("/v1/images/generations", body);
 
                 if (!res.ok()) {
-                    response.error = "DALL-E error: HTTP " + std::to_string(res.statusCode);
+                    response.error = "Image generation error: HTTP" + std::to_string(res.statusCode);
                     try {
                         auto j = res.json();
                         if (j.contains("error") && j["error"].contains("message")) {
@@ -527,7 +527,7 @@ private:
                 if (response.ok) break; // success
 
             } catch (std::exception& e) {
-                response.error = std::string("DALL-E exception: ") + e.what();
+                response.error = std::string("Image generation exception:") + e.what();
             }
         }
 
