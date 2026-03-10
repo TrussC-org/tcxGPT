@@ -173,9 +173,10 @@ public:
     // Image generation request
     struct ImageRequest {
         std::string prompt;
-        std::string model = "dall-e-3";
+        std::string model = "gpt-image-1";
         std::string size = "1024x1024";
-        std::string quality = "standard";
+        std::string quality = "medium"; // low, medium, high
+        std::string outputFormat = "png"; // png, jpeg, webp
     };
 
     // Image generation response
@@ -185,7 +186,7 @@ public:
         std::string imageData; // Raw binary (PNG/JPEG)
     };
 
-    // Queue a DALL-E image generation request
+    // Queue an image generation request (gpt-image-1)
     void generateImage(const ImageRequest& request) {
         std::lock_guard<std::mutex> lock(imageRequestMutex_);
         imageRequestQueue_.push_back(request);
@@ -482,7 +483,7 @@ private:
             {"n", 1},
             {"size", request.size},
             {"quality", request.quality},
-            {"response_format", "b64_json"}
+            {"output_format", request.outputFormat}
         };
 
         // Retry up to 3 times
