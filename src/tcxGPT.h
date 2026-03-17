@@ -177,6 +177,7 @@ public:
         std::string size = "1024x1024";
         std::string quality = "medium"; // low, medium, high
         std::string outputFormat = "png"; // png, jpeg, webp
+        std::vector<std::string> inputImages; // base64-encoded input images for editing
     };
 
     // Image generation response
@@ -485,6 +486,15 @@ private:
             {"quality", request.quality},
             {"output_format", request.outputFormat}
         };
+
+        // Add input images for editing (base64)
+        if (!request.inputImages.empty()) {
+            nlohmann::json images = nlohmann::json::array();
+            for (auto& img : request.inputImages) {
+                images.push_back(img);
+            }
+            body["image"] = images;
+        }
 
         // Retry up to 3 times
         for (int attempt = 0; attempt < 3; attempt++) {
