@@ -469,9 +469,17 @@ private:
 
     // Process image generation request (with retry)
     ImageResponse processImageRequest(const ImageRequest& request) {
+        // Route to edit endpoint if input images provided
+        if (!request.inputImages.empty()) {
+            return processImageEditRequest(request);
+        }
+        return processImageGenerateRequest(request);
+    }
+
+    // Generate new image (no input image)
+    ImageResponse processImageGenerateRequest(const ImageRequest& request) {
         ImageResponse response;
 
-        // Use a separate HttpClient with verbose logging for debugging
         HttpClient dalleHttp;
         dalleHttp.setBaseUrl("https://api.openai.com");
         dalleHttp.setBearerToken(apiKey_);
@@ -487,38 +495,20 @@ private:
             {"output_format", request.outputFormat}
         };
 
-        // Add input images for editing (base64)
-        if (!request.inputImages.empty()) {
-            nlohmann::json images = nlohmann::json::array();
-            for (auto& img : request.inputImages) {
-                images.push_back(img);
-            }
-            body["image"] = images;
-        }
-
-        // Retry up to 3 times
         for (int attempt = 0; attempt < 3; attempt++) {
             response = {};
-
             try {
-                if (attempt > 0) {
-                    std::this_thread::sleep_for(std::chrono::seconds(2));
-                }
+                if (attempt > 0) std::this_thread::sleep_for(std::chrono::seconds(2));
 
                 auto res = dalleHttp.post("/v1/images/generations", body);
-
                 if (!res.ok()) {
                     response.error = "Image generation error: HTTP" + std::to_string(res.statusCode);
                     try {
                         auto j = res.json();
-                        if (j.contains("error") && j["error"].contains("message")) {
+                        if (j.contains("error") && j["error"].contains("message"))
                             response.error += " - " + j["error"]["message"].get<std::string>();
-                        }
                     } catch (...) {}
-                    if (!res.error.empty()) {
-                        response.error += " (" + res.error + ")";
-                    }
-                    continue; // retry
+                    continue;
                 }
 
                 auto json = res.json();
@@ -529,18 +519,133 @@ private:
                         response.ok = true;
                     }
                 }
-
-                if (!response.ok && response.error.empty()) {
-                    response.error = "No image data in response";
-                }
-
-                if (response.ok) break; // success
-
+                if (!response.ok && response.error.empty()) response.error = "No image data in response";
+                if (response.ok) break;
             } catch (std::exception& e) {
                 response.error = std::string("Image generation exception:") + e.what();
             }
         }
+        return response;
+    }
 
+    // Edit image using /v1/images/edits with multipart form-data (curl)
+    ImageResponse processImageEditRequest(const ImageRequest& request) {
+        ImageResponse response;
+
+#ifdef TCX_HTTP_CURL
+        for (int attempt = 0; attempt < 3; attempt++) {
+            response = {};
+            try {
+                if (attempt > 0) std::this_thread::sleep_for(std::chrono::seconds(2));
+
+                CURL* curl = curl_easy_init();
+                if (!curl) { response.error = "Failed to init curl"; continue; }
+
+                std::string url = "https://api.openai.com/v1/images/edits";
+                curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+                curl_easy_setopt(curl, CURLOPT_TIMEOUT, 180L);
+
+                // Auth header
+                struct curl_slist* headers = nullptr;
+                std::string authHeader = "Authorization: Bearer " + apiKey_;
+                headers = curl_slist_append(headers, authHeader.c_str());
+                curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+                // Decode base64 input image to raw bytes
+                std::string imageBytes;
+                if (!request.inputImages.empty()) {
+                    std::string b64 = request.inputImages[0];
+                    // Strip data URL prefix if present
+                    auto commaPos = b64.find(',');
+                    if (commaPos != std::string::npos) b64 = b64.substr(commaPos + 1);
+                    imageBytes = decodeBase64(b64);
+                }
+
+                // Build multipart form
+                curl_mime* mime = curl_mime_init(curl);
+
+                // image file
+                curl_mimepart* part = curl_mime_addpart(mime);
+                curl_mime_name(part, "image");
+                curl_mime_data(part, imageBytes.data(), imageBytes.size());
+                curl_mime_filename(part, "input.png");
+                curl_mime_type(part, "image/png");
+
+                // prompt
+                part = curl_mime_addpart(mime);
+                curl_mime_name(part, "prompt");
+                curl_mime_data(part, request.prompt.c_str(), request.prompt.size());
+
+                // model
+                part = curl_mime_addpart(mime);
+                curl_mime_name(part, "model");
+                curl_mime_data(part, request.model.c_str(), request.model.size());
+
+                // size
+                part = curl_mime_addpart(mime);
+                curl_mime_name(part, "size");
+                curl_mime_data(part, request.size.c_str(), request.size.size());
+
+                // n
+                part = curl_mime_addpart(mime);
+                curl_mime_name(part, "n");
+                curl_mime_data(part, "1", 1);
+
+                curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
+
+                // Response
+                std::string responseBody;
+                curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,
+                    +[](void* contents, size_t size, size_t nmemb, void* userp) -> size_t {
+                        auto* resp = static_cast<std::string*>(userp);
+                        resp->append(static_cast<char*>(contents), size * nmemb);
+                        return size * nmemb;
+                    });
+                curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseBody);
+
+                CURLcode curlRes = curl_easy_perform(curl);
+                long httpCode = 0;
+                curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+
+                curl_mime_free(mime);
+                curl_slist_free_all(headers);
+                curl_easy_cleanup(curl);
+
+                if (curlRes != CURLE_OK) {
+                    response.error = "curl error: " + std::string(curl_easy_strerror(curlRes));
+                    continue;
+                }
+
+                if (httpCode != 200) {
+                    response.error = "Image edit error: HTTP" + std::to_string(httpCode);
+                    try {
+                        auto j = nlohmann::json::parse(responseBody);
+                        if (j.contains("error") && j["error"].contains("message"))
+                            response.error += " - " + j["error"]["message"].get<std::string>();
+                    } catch (...) {}
+                    continue;
+                }
+
+                auto json = nlohmann::json::parse(responseBody);
+                if (json.contains("data") && json["data"].is_array() && !json["data"].empty()) {
+                    std::string b64 = json["data"][0].value("b64_json", "");
+                    if (!b64.empty()) {
+                        response.imageData = decodeBase64(b64);
+                        response.ok = true;
+                    }
+                }
+                if (!response.ok && response.error.empty()) response.error = "No image data in response";
+                if (response.ok) break;
+            } catch (std::exception& e) {
+                response.error = std::string("Image edit exception: ") + e.what();
+            }
+        }
+#else
+        // Fallback: try generation without input image
+        ImageRequest genReq = request;
+        genReq.inputImages.clear();
+        return processImageGenerateRequest(genReq);
+#endif
         return response;
     }
 
