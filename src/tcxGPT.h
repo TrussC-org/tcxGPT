@@ -598,6 +598,12 @@ private:
                 curl_mime_name(part, "quality");
                 curl_mime_data(part, request.quality.c_str(), request.quality.size());
 
+                // output_format (ensure b64_json response)
+                std::string outFmt = request.outputFormat.empty() ? "png" : request.outputFormat;
+                part = curl_mime_addpart(mime);
+                curl_mime_name(part, "output_format");
+                curl_mime_data(part, outFmt.c_str(), outFmt.size());
+
                 curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
 
                 // Response
