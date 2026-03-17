@@ -177,7 +177,8 @@ public:
         std::string size = "1024x1024";
         std::string quality = "medium"; // low, medium, high
         std::string outputFormat = "png"; // png, jpeg, webp
-        std::vector<std::string> inputImages; // base64-encoded input images for editing
+        std::vector<std::string> inputImages; // base64-encoded input images (legacy)
+        std::string inputImageRaw; // raw PNG/JPEG bytes for editing (preferred)
     };
 
     // Image generation response
@@ -470,7 +471,7 @@ private:
     // Process image generation request (with retry)
     ImageResponse processImageRequest(const ImageRequest& request) {
         // Route to edit endpoint if input images provided
-        if (!request.inputImages.empty()) {
+        if (!request.inputImageRaw.empty() || !request.inputImages.empty()) {
             return processImageEditRequest(request);
         }
         return processImageGenerateRequest(request);
@@ -551,11 +552,12 @@ private:
                 headers = curl_slist_append(headers, authHeader.c_str());
                 curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
-                // Decode base64 input image to raw bytes
+                // Get image bytes (prefer raw, fallback to base64 decode)
                 std::string imageBytes;
-                if (!request.inputImages.empty()) {
+                if (!request.inputImageRaw.empty()) {
+                    imageBytes = request.inputImageRaw;
+                } else if (!request.inputImages.empty()) {
                     std::string b64 = request.inputImages[0];
-                    // Strip data URL prefix if present
                     auto commaPos = b64.find(',');
                     if (commaPos != std::string::npos) b64 = b64.substr(commaPos + 1);
                     imageBytes = decodeBase64(b64);
