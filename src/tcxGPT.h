@@ -593,6 +593,11 @@ private:
                 curl_mime_name(part, "n");
                 curl_mime_data(part, "1", 1);
 
+                // quality
+                part = curl_mime_addpart(mime);
+                curl_mime_name(part, "quality");
+                curl_mime_data(part, request.quality.c_str(), request.quality.size());
+
                 curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
 
                 // Response
@@ -630,10 +635,34 @@ private:
 
                 auto json = nlohmann::json::parse(responseBody);
                 if (json.contains("data") && json["data"].is_array() && !json["data"].empty()) {
+                    // Try b64_json first
                     std::string b64 = json["data"][0].value("b64_json", "");
                     if (!b64.empty()) {
                         response.imageData = decodeBase64(b64);
                         response.ok = true;
+                    }
+                    // Fallback: download from URL
+                    if (!response.ok) {
+                        std::string imgUrl = json["data"][0].value("url", "");
+                        if (!imgUrl.empty()) {
+                            CURL* dl = curl_easy_init();
+                            if (dl) {
+                                std::string imgBody;
+                                curl_easy_setopt(dl, CURLOPT_URL, imgUrl.c_str());
+                                curl_easy_setopt(dl, CURLOPT_TIMEOUT, 60L);
+                                curl_easy_setopt(dl, CURLOPT_WRITEFUNCTION,
+                                    +[](void* c, size_t s, size_t n, void* u) -> size_t {
+                                        static_cast<std::string*>(u)->append(static_cast<char*>(c), s*n);
+                                        return s*n;
+                                    });
+                                curl_easy_setopt(dl, CURLOPT_WRITEDATA, &imgBody);
+                                if (curl_easy_perform(dl) == CURLE_OK && !imgBody.empty()) {
+                                    response.imageData = imgBody;
+                                    response.ok = true;
+                                }
+                                curl_easy_cleanup(dl);
+                            }
+                        }
                     }
                 }
                 if (!response.ok && response.error.empty()) response.error = "No image data in response";
