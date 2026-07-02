@@ -29,7 +29,7 @@
 #include <algorithm>
 #include <tcxCurl.h>
 
-namespace tcx {
+namespace tcx::gpt {
 
 class GPT {
 public:
@@ -756,4 +756,14 @@ private:
     std::atomic<bool> running_{false};
 };
 
-} // namespace tcx
+} // namespace tcx::gpt
+
+// -----------------------------------------------------------------------------
+// Backward compatibility. The canonical namespace is now `tcx::gpt`. These
+// silent aliases keep older code compiling: flat `tcx::GPT` and legacy
+// `trussc::GPT`. DEPRECATED — removed in v1.0.0.
+// (No [[deprecated]] attribute: under the usual `using namespace tc;` it would
+//  warn on idiomatic unqualified use too. See tcxGPT README for migration.)
+// -----------------------------------------------------------------------------
+namespace tcx    { using gpt::GPT; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::gpt::GPT; } // deprecated: remove at v1.0.0
