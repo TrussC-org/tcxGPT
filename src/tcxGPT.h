@@ -485,7 +485,7 @@ private:
         dalleHttp.setBaseUrl("https://api.openai.com");
         dalleHttp.setBearerToken(apiKey_);
         dalleHttp.setTimeout(180);
-        dalleHttp.setVerbose(true);
+        dalleHttp.setVerbose(verbose_);
 
         nlohmann::json body = {
             {"model", request.model},
