@@ -541,6 +541,7 @@ private:
 
                 CURL* curl = curl_easy_init();
                 if (!curl) { response.error = "Failed to init curl"; continue; }
+                tcx::curl::detail::applyTlsDefaults(curl);
 
                 std::string url = "https://api.openai.com/v1/images/edits";
                 curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
@@ -653,6 +654,7 @@ private:
                         if (!imgUrl.empty()) {
                             CURL* dl = curl_easy_init();
                             if (dl) {
+                                tcx::curl::detail::applyTlsDefaults(dl);
                                 std::string imgBody;
                                 curl_easy_setopt(dl, CURLOPT_URL, imgUrl.c_str());
                                 curl_easy_setopt(dl, CURLOPT_TIMEOUT, 60L);
